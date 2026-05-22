@@ -1,0 +1,6 @@
+{
+  "name": "Super Snake",
+  "description": "經典街機風格的貪食蛇遊戲，具有豐富飽和色彩、關卡速度、高分榜、精緻音效設計以及完全適配的 RWD 響應式佈局。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
