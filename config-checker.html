@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Config 配對檢查</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66;
+    --border: #dcdcd6; --ok: #1f7a3a; --err: #b3261e; --warn: #8a5a00;
+    --accent: #2b5cab; --code-bg: #f0f0ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161615; --panel: #1f1f1d; --text: #ececea; --muted: #9a9a94;
+      --border: #3a3a36; --ok: #5cc27a; --err: #ff8a80; --warn: #e0b050;
+      --accent: #8ab4f8; --code-bg: #262624;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Noto Sans TC", sans-serif;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 20px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px; margin-bottom: 16px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button, label.btn {
+    font: inherit; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  input[type=file] { display: none; }
+  textarea {
+    width: 100%; min-height: 220px; margin-top: 12px; padding: 10px;
+    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--code-bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; resize: vertical;
+  }
+  #fname { color: var(--muted); font-size: 0.9rem; }
+  #summary { font-weight: 600; margin: 0 0 8px; }
+  #summary.ok { color: var(--ok); }
+  #summary.err { color: var(--err); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  td.ln { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  td code { background: var(--code-bg); padding: 1px 4px; border-radius: 4px; word-break: break-all; }
+  .tbl-wrap { overflow-x: auto; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Config 配對檢查</h1>
+  <p class="lead">檢查每個 <code>config</code> 都有對應的 <code>end</code>，每個 <code>edit</code> 都有對應的 <code>next</code>，且巢狀順序正確。檔案只在瀏覽器內處理，不會上傳。</p>
+
+  <section class="panel">
+    <div class="row">
+      <label class="btn" for="file">選擇檔案…</label>
+      <input type="file" id="file" accept=".txt,.conf,.cfg,text/plain">
+      <button id="check" class="primary">檢查</button>
+      <button id="sample">載入範例</button>
+      <span id="fname"></span>
+    </div>
+    <textarea id="src" spellcheck="false" placeholder="選擇檔案，或直接貼上設定內容…"></textarea>
+  </section>
+
+  <section class="panel" id="out" hidden>
+    <p id="summary"></p>
+    <div class="tbl-wrap"><table id="tbl" hidden>
+      <thead><tr><th>行號</th><th>問題</th><th>內容</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+</main>
+
+<script>
+// Core checker. Returns { errors: [{line, msg, text}], counts }.
+function checkConfig(text) {
+  const lines = text.split(/\r\n|\r|\n/);
+  const stack = []; // {kind:'config'|'edit', line, text}
+  const errors = [];
+  const counts = { config: 0, end: 0, edit: 0, next: 0 };
+  const OPEN_FOR = { end: 'config', next: 'edit' };
+
+  lines.forEach((raw, i) => {
+    const ln = i + 1;
+    const t = raw.trim();
+    if (!t || t.startsWith('#')) return;
+    const kw = t.split(/\s+/)[0].toLowerCase();
+
+    if (kw === 'config' || kw === 'edit') {
+      counts[kw]++;
+      if (kw === 'edit' && (!stack.length || stack[stack.length - 1].kind !== 'config')) {
+        errors.push({ line: ln, msg: '「edit」不在 config 區塊內', text: t });
+      }
+      stack.push({ kind: kw, line: ln, text: t });
+    } else if (kw === 'end' || kw === 'next') {
+      counts[kw]++;
+      const want = OPEN_FOR[kw];
+      const top = stack[stack.length - 1];
+      if (top && top.kind === want) { stack.pop(); return; }
+      // Mismatch: look for a matching opener deeper in the stack.
+      let idx = -1;
+      for (let j = stack.length - 1; j >= 0; j--) if (stack[j].kind === want) { idx = j; break; }
+      if (idx === -1) {
+        errors.push({ line: ln, msg: `多出的「${kw}」，沒有對應的「${want}」`, text: t });
+      } else {
+        // Everything above idx was left open: report it, then close idx.
+        for (let j = stack.length - 1; j > idx; j--) {
+          const o = stack[j];
+          errors.push({ line: o.line, msg: `「${o.kind}」未關閉（缺少「${o.kind === 'config' ? 'end' : 'next'}」，在第 ${ln} 行的「${kw}」之前）`, text: o.text });
+        }
+        stack.length = idx;
+      }
+    }
+  });
+
+  for (const o of stack) {
+    errors.push({ line: o.line, msg: `「${o.kind}」直到檔案結尾都未關閉（缺少「${o.kind === 'config' ? 'end' : 'next'}」）`, text: o.text });
+  }
+  errors.sort((a, b) => a.line - b.line);
+  return { errors, counts, lineCount: lines.length };
+}
+
+const $ = id => document.getElementById(id);
+
+function run() {
+  const { errors, counts, lineCount } = checkConfig($('src').value);
+  const out = $('out'), sum = $('summary'), tbl = $('tbl'), body = tbl.querySelector('tbody');
+  out.hidden = false;
+  body.textContent = '';
+  const tally = `config ${counts.config} / end ${counts.end}，edit ${counts.edit} / next ${counts.next}，共 ${lineCount} 行`;
+  if (!errors.length) {
+    sum.className = 'ok';
+    sum.textContent = `全部配對正確。（${tally}）`;
+    tbl.hidden = true;
+    return;
+  }
+  sum.className = 'err';
+  sum.textContent = `發現 ${errors.length} 個問題。（${tally}）`;
+  for (const e of errors) {
+    const tr = document.createElement('tr');
+    const a = document.createElement('td'); a.className = 'ln'; a.textContent = e.line;
+    const b = document.createElement('td'); b.textContent = e.msg;
+    const c = document.createElement('td'); const code = document.createElement('code');
+    code.textContent = e.text; c.appendChild(code);
+    tr.append(a, b, c); body.appendChild(tr);
+  }
+  tbl.hidden = false;
+}
+
+$('file').addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { $('src').value = r.result; $('fname').textContent = f.name; run(); };
+  r.readAsText(f);
+});
+$('check').addEventListener('click', run);
+$('sample').addEventListener('click', () => {
+  $('fname').textContent = '範例（含錯誤）';
+  $('src').value = [
+    'config system global',
+    '    set hostname "FW01"',
+    'end',
+    'config firewall address',
+    '    edit "lan"',
+    '        set subnet 192.168.1.0 255.255.255.0',
+    '    next',
+    '    edit "dmz"',
+    '        set subnet 10.0.0.0 255.255.255.0',
+    'end',
+    'config system interface',
+    '    edit "port1"',
+    '        config ipv6',
+    '            set ip6-mode static',
+    '        end',
+    '    next',
+    'next',
+    'config router static',
+    '    edit 1',
+    '        set gateway 192.168.1.254',
+    '    next',
+  ].join('\n');
+  run();
+});
+</script>
+</body>
+</html>
